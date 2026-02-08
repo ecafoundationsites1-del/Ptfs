@@ -4,106 +4,100 @@ local UserInputService = game:GetService("UserInputService")
 local Camera = workspace.CurrentCamera
 local localPlayer = Players.LocalPlayer
 
-local TARGET_PART_NAME = "Nose" 
+-- [설정]
+local TARGET_NAME = "Nose"
+local HUD_COLOR = Color3.fromRGB(0, 255, 100) 
 
--- 해당 파트가 속한 최상위 모델 이름을 찾는 함수
-local function getRootModelName(obj)
-    local current = obj
-    local lastModel = obj
-    
-    -- Workspace 바로 아래에 올 때까지 부모를 타고 올라감
-    while current and current.Parent ~= workspace and current.Parent ~= nil do
-        if current:IsA("Model") then
-            lastModel = current
+local activeESPs = {}
+
+-- 맵에 있는 섬(장소)들의 위치를 파악하는 함수
+local function getNearestIsland(position)
+    local nearestIsland = "Unknown Ocean"
+    local minDistance = 2000 -- 최대 감지 거리 (이보다 멀면 그냥 바다)
+
+    -- 보통 맵의 섬 이름은 Folder나 특정 모델 안에 텍스트/파트 형태로 있습니다.
+    -- 여기서는 예시 사진에 나온 이름들을 기준으로 근처의 큰 지형이나 마커를 찾습니다.
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        -- 섬 이름이 담긴 오브젝트(주로 Folder 내의 Part나 Model)를 찾음
+        if obj:IsA("BasePart") and (obj.Parent.Name == "Islands" or obj:FindFirstChild("TouchInterest")) then
+            local dist = (position - obj.Position).Magnitude
+            if dist < minDistance then
+                minDistance = dist
+                nearestIsland = obj.Name
+            end
         end
-        current = current.Parent
     end
-    return lastModel.Name
+    return nearestIsland
+end
+
+local function getVehicleModel(part)
+	local current = part
+	local lastModel = part
+	while current and current.Parent ~= workspace and current.Parent ~= nil do
+		if current:IsA("Model") then lastModel = current end
+		current = current.Parent
+	end
+	return lastModel
 end
 
 local function createESP(part)
-    if part:FindFirstChild("ESPHolder") then return end
+	local vehicle = getVehicleModel(part)
+	if activeESPs[vehicle] then return end
+	activeESPs[vehicle] = true
 
-    -- 모델 이름 미리 가져오기
-    local rootName = getRootModelName(part)
+	local holder = Instance.new("Folder")
+	holder.Name = "IslandESP"
+	holder.Parent = part
 
-    local holder = Instance.new("Folder")
-    holder.Name = "ESPHolder"
-    holder.Parent = part
+	local bgui = Instance.new("BillboardGui")
+	bgui.Size = UDim2.new(0, 200, 0, 60)
+	bgui.AlwaysOnTop = true
+	bgui.Adornee = part
+	bgui.Parent = holder
 
-    local bgui = Instance.new("BillboardGui")
-    bgui.Size = UDim2.new(0, 150, 0, 50)
-    bgui.Adornee = part
-    bgui.AlwaysOnTop = true
-    bgui.Parent = holder
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, 0, 1, 0)
+	label.BackgroundTransparency = 1 
+	label.TextStrokeTransparency = 1 -- 검은 테두리 제거
+	label.TextColor3 = HUD_COLOR
+	label.TextSize = 14
+	label.Font = Enum.Font.RobotoMono
+	label.Parent = bgui
 
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, 0, 1, 0)
-    label.BackgroundTransparency = 0.5
-    label.BackgroundColor3 = Color3.new(0, 0, 0)
-    label.TextColor3 = Color3.fromRGB(255, 255, 0) -- 눈에 잘 띄는 노란색
-    label.TextSize = 14
-    label.Font = Enum.Font.SourceSansBold
-    label.Parent = bgui
+	local att1 = Instance.new("Attachment", part)
+	local att0 = Instance.new("Attachment", workspace.Terrain)
+	
+	local beam = Instance.new("Beam")
+	beam.Attachment0 = att0
+	beam.Attachment1 = att1
+	beam.Width0 = 0.01
+	beam.Width1 = 0.01
+	beam.Color = ColorSequence.new(HUD_COLOR)
+	beam.Transparency = NumberSequence.new(0.6)
+	beam.Parent = holder
 
-    local att1 = Instance.new("Attachment", part)
-    local att0 = Instance.new("Attachment", workspace.Terrain)
-    
-    local beam = Instance.new("Beam")
-    beam.Attachment0 = att0
-    beam.Attachment1 = att1
-    beam.Width0 = 0.05
-    beam.Width1 = 0.05
-    beam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0)) -- 추적 선은 빨간색
-    beam.Parent = holder
+	RunService.RenderStepped:Connect(function()
+		if not part or not part.Parent or not vehicle.Parent then
+			activeESPs[vehicle] = nil
+			holder:Destroy()
+			return
+		end
 
-    RunService.RenderStepped:Connect(function()
-        if not part or not part.Parent then 
-            holder:Destroy() 
-            return 
-        end
-        
-        att0.WorldPosition = Camera.CFrame.Position
-        local speed = part.AssemblyLinearVelocity.Magnitude
-        
-        -- 텍스트 업데이트: [모델 이름] 과 속도 표시
-        label.Text = string.format("[%s]\n%.1f studs/s", rootName, speed)
-    end)
+		att0.WorldPosition = Camera.CFrame.Position
+		local speed = part.AssemblyLinearVelocity.Magnitude
+		
+		-- 섬 위치 파악 (매 프레임 하면 무거우니 0.5초마다 하거나 단순 거리 체크)
+		local location = getNearestIsland(part.Position)
+		
+		-- 출력 형식: [기체이름] 위치: 섬이름 / 속도
+		label.Text = string.format("[%s]\nLOC: %s\nSPD: %d", vehicle.Name, location, math.floor(speed))
+	end)
 end
 
--- 스캔 로직
-local function scan()
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("BasePart") and obj.Name == TARGET_PART_NAME then
-            createESP(obj)
-        end
-    end
+-- 스캔 로직 (생략 - 이전과 동일)
+for _, obj in ipairs(workspace:GetDescendants()) do
+	if obj:IsA("BasePart") and obj.Name == TARGET_NAME then createESP(obj) end
 end
-
-scan()
 workspace.DescendantAdded:Connect(function(obj)
-    if obj:IsA("BasePart") and obj.Name == TARGET_PART_NAME then
-        createESP(obj)
-    end
+	if obj:IsA("BasePart") and obj.Name == TARGET_NAME then task.wait(0.2) createESP(obj) end
 end)
-
--- 1번 키로 카메라 추적
-local watching = false
-UserInputService.InputBegan:Connect(function(input, gpe)
-    if gpe then return end
-    if input.KeyCode == Enum.KeyCode.One then
-        if not watching then
-            for _, obj in ipairs(workspace:GetDescendants()) do
-                if obj.Name == TARGET_PART_NAME then
-                    Camera.CameraSubject = obj
-                    watching = true
-                    break
-                end
-            end
-        else
-            Camera.CameraSubject = localPlayer.Character:FindFirstChild("Humanoid")
-            watching = false
-        end
-    end
-end)
-
