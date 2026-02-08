@@ -3,73 +3,93 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
--- 스크립트 중복 실행 방지
+-- 중복 실행 방지
 if _G.PTFS_ESP_LOADED then _G.PTFS_ESP_LOADED = false task.wait(0.1) end
 _G.PTFS_ESP_LOADED = true
 
--- [UI 설정 및 생성 생략 - 기존 UI 코드 유지하되 아래 로직만 교체하세요]
--- (편의를 위해 핵심 로직 부분만 명확히 다시 짜드립니다)
+-- [기존 UI 변수 연결] 
+-- 실행 시 이미 생성된 UI가 있다면 해당 ScrollingFrame과 InfoLabel을 연결하세요.
+local ScreenGui = game:GetService("CoreGui"):FindFirstChild("PTFS_Fool_ESP") or Instance.new("ScreenGui", game:GetService("CoreGui"))
+local MainFrame = ScreenGui:FindFirstChild("MainFrame")
+local ScrollingFrame = MainFrame and MainFrame:FindFirstChild("ScrollingFrame")
+local InfoLabel = MainFrame and MainFrame:FindFirstChild("InfoLabel")
 
 local TargetPlane = nil
+local TargetNose = nil
 
--- 비행기 판별 및 목록 업데이트 로직 강화
+-- 'Nose' 파트를 가진 비행기 목록 갱신
 local function updateList()
+    if not ScrollingFrame then return end
     for _, child in pairs(ScrollingFrame:GetChildren()) do
         if child:IsA("TextButton") then child:Destroy() end
     end
 
-    -- 전수 조사: 모델 중 좌석(Seat/VehicleSeat)이 있는 것을 비행기로 간주
+    -- 전수 조사: 'Nose'라는 이름을 가진 파트가 있는 모델 찾기
     for _, obj in pairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") and (obj:FindFirstChildOfClass("VehicleSeat") or obj:FindFirstChild("Engine")) then
-            -- 너무 멀리 있거나 본인 기체 제외하려면 조건 추가 가능
-            local btn = Instance.new("TextButton")
-            btn.Parent = ScrollingFrame
-            btn.Size = UDim2.new(1, -10, 0, 35)
-            btn.Text = "[" .. (obj.PrimaryPart and obj.Name or "Unknown") .. "]"
-            btn.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
-            btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-            btn.Font = Enum.Font.SourceSansBold
+        if obj:IsA("Model") then
+            local nose = obj:FindFirstChild("Nose", true) -- 하위 모든 폴더/파트 중 'Nose' 검색
+            
+            if nose and nose:IsA("BasePart") then
+                local btn = Instance.new("TextButton")
+                btn.Parent = ScrollingFrame
+                btn.Size = UDim2.new(1, -10, 0, 35)
+                btn.Text = "✈️ " .. obj.Name
+                btn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+                btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                btn.Font = Enum.Font.SourceSansBold
+                btn.TextSize = 16
 
-            btn.MouseButton1Click:Connect(function()
-                TargetPlane = obj
-                InfoLabel.Text = "추적 시작: " .. obj.Name
-                InfoLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-            end)
+                btn.MouseButton1Click:Connect(function()
+                    TargetPlane = obj
+                    TargetNose = nose
+                    if InfoLabel then 
+                        InfoLabel.Text = "🎯 추적 대상: " .. obj.Name 
+                        InfoLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
+                    end
+                end)
+            end
         end
     end
 end
 
--- 섬 이름 판별 (Raycast 방식 최적화)
+-- 섬 이름 판별 함수
 local function getIslandName(pos)
     local rayparams = RaycastParams.new()
     rayparams.FilterType = Enum.RaycastFilterType.Blacklist
     rayparams.FilterDescendantsInstances = {LocalPlayer.Character, Camera}
     
-    local result = workspace:Raycast(pos, Vector3.new(0, -1000, 0), rayparams)
+    local result = workspace:Raycast(pos, Vector3.new(0, -2000, 0), rayparams)
     if result and result.Instance then
-        -- PTFS 맵 구조에 따라 result.Instance.Parent.Name 등을 써야 할 수도 있음
-        return result.Instance.Name 
+        -- 부모의 이름이 섬 이름인 경우가 많음 (PTFS 구조에 따라 수정 가능)
+        return result.Instance.Parent.Name or result.Instance.Name
     end
-    return "바다 위"
+    return "바다 (Ocean)"
 end
 
--- 실시간 추적 및 화면 고정
+-- 실시간 카메라 고정 및 정보 업데이트
 RunService.RenderStepped:Connect(function()
     if not _G.PTFS_ESP_LOADED then return end
     
-    if TargetPlane and (TargetPlane.PrimaryPart or TargetPlane:FindFirstChildWhichIsA("BasePart")) then
-        local root = TargetPlane.PrimaryPart or TargetPlane:FindFirstChildWhichIsA("BasePart")
+    if TargetPlane and TargetNose then
+        -- 1. 카메라가 비행기의 'Nose' 파트를 조준
+        Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, TargetNose.Position)
         
-        -- 카메라 시선 고정 (핵심: 화면만 돌아감)
-        Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, root.Position)
+        -- 2. 상세 정보 표시
+        local speed = math.floor(TargetNose.Velocity.Magnitude * 1.94384)
+        local island = getIslandName(TargetNose.Position)
         
-        -- 정보 갱신
-        local speed = math.floor(root.Velocity.Magnitude * 1.94384)
-        local island = getIslandName(root.Position)
-        InfoLabel.Text = string.format("기종: %s\n속도: %d kts | 위치: %s", TargetPlane.Name, speed, island)
+        if InfoLabel then
+            InfoLabel.Text = string.format("기종: %s\n속도: %d kts | 위치: %s", TargetPlane.Name, speed, island)
+        end
     end
 end)
 
--- 초기 실행
+-- 실행
 updateList()
-
+-- 10초마다 자동으로 새로운 비행기 목록 갱신
+task.spawn(function()
+    while _G.PTFS_ESP_LOADED do
+        task.wait(10)
+        updateList()
+    end
+end)
