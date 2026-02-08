@@ -1,102 +1,114 @@
--- 1. 기존 UI 제거 (중복 실행 방지)
-local oldGui = game:GetService("CoreGui"):FindFirstChild("PTFS_Fool_ESP") or game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("PTFS_Fool_ESP")
-if oldGui then oldGui:Destroy() end
-
-local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local LocalPlayer = Players.LocalPlayer
+local Players = game:GetService("Players")
 local Camera = workspace.CurrentCamera
 
--- 2. UI 생성 (경로를 PlayerGui로 변경하여 안정성 확보)
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "PTFS_Fool_ESP"
-ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") -- CoreGui 대신 PlayerGui 사용
-ScreenGui.ResetOnSpawn = false
+local localPlayer = Players.LocalPlayer
 
-local MainFrame = Instance.new("Frame")
-MainFrame.Name = "MainFrame"
-MainFrame.Parent = ScreenGui
-MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-MainFrame.Position = UDim2.new(0.05, 0, 0.2, 0) -- 위치 약간 위로 조정
-MainFrame.Size = UDim2.new(0, 250, 0, 400)
-MainFrame.Active = true
-MainFrame.Draggable = true
+-- ESP 생성 함수
+local function createESP(part)
+    -- 이미 ESP가 있다면 생성 안 함
+    if part:FindFirstChild("ESPHolder") then return end
 
-local Title = Instance.new("TextLabel")
-Title.Parent = MainFrame
-Title.Size = UDim2.new(1, 0, 0, 40)
-Title.Text = "PTFS Nose 탐지기"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+    local holder = Instance.new("Folder")
+    holder.Name = "ESPHolder"
+    holder.Parent = part
 
-local ScrollingFrame = Instance.new("ScrollingFrame")
-ScrollingFrame.Parent = MainFrame
-ScrollingFrame.Position = UDim2.new(0, 0, 0, 45)
-ScrollingFrame.Size = UDim2.new(1, 0, 0, 290)
-ScrollingFrame.CanvasSize = UDim2.new(0, 0, 5, 0) -- 스크롤 가능하게 캔버스 크기 키움
-ScrollingFrame.ScrollBarThickness = 6
+    -- BillboardGui (텍스트 표시용)
+    local bgui = Instance.new("BillboardGui")
+    bgui.Size = UDim2.new(0, 200, 0, 50)
+    bgui.Adornee = part
+    bgui.AlwaysOnTop = true
+    bgui.StudsOffset = Vector3.new(0, 2, 0)
+    bgui.Parent = holder
 
-local UIListLayout = Instance.new("UIListLayout")
-UIListLayout.Parent = ScrollingFrame
-UIListLayout.Padding = Vector2.new(0, 5)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = Color3.new(1, 0, 0) -- 빨간색
+    label.TextStrokeTransparency = 0
+    label.TextScaled = true
+    label.Parent = bgui
 
-local InfoLabel = Instance.new("TextLabel")
-InfoLabel.Parent = MainFrame
-InfoLabel.Position = UDim2.new(0, 0, 0, 340)
-InfoLabel.Size = UDim2.new(1, 0, 0, 60)
-InfoLabel.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-InfoLabel.Text = "Nose 파트를 찾는 중..."
-InfoLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
-InfoLabel.TextSize = 14
-InfoLabel.TextWrapped = true
+    -- Beam (선 연결용 - 카메라와 연결)
+    local attachment1 = Instance.new("Attachment", part)
+    local attachment0 = Instance.new("Attachment") 
+    attachment0.Parent = workspace.Terrain -- 카메라 위치 대용
 
--- 3. 핵심 로직
-local TargetPlane = nil
-local TargetNose = nil
+    local beam = Instance.new("Beam")
+    beam.Attachment0 = attachment0
+    beam.Attachment1 = attachment1
+    beam.Width0 = 0.1
+    beam.Width1 = 0.1
+    beam.Color = ColorSequence.new(Color3.new(1, 1, 0)) -- 노란색 선
+    beam.FaceCamera = true
+    beam.Parent = holder
 
-local function updateList()
-    for _, child in pairs(ScrollingFrame:GetChildren()) do
-        if child:IsA("TextButton") then child:Destroy() end
-    end
+    -- 실시간 업데이트
+    local connection
+    connection = RunService.RenderStepped:Connect(function()
+        if not part or not part.Parent then
+            connection:Disconnect()
+            holder:Destroy()
+            return
+        end
 
-    -- 'Nose' 파트가 있는 모델을 비행기로 인식
-    for _, obj in pairs(workspace:GetDescendants()) do
-        if obj:IsA("BasePart") and obj.Name == "Nose" then
-            local model = obj.Parent
-            -- 부모가 모델이 아닐 경우 위로 더 올라가서 모델 찾기
-            if not model:IsA("Model") then model = model.Parent end
-            
-            if model:IsA("Model") then
-                local btn = Instance.new("TextButton")
-                btn.Parent = ScrollingFrame
-                btn.Size = UDim2.new(1, -10, 0, 35)
-                btn.Text = "✈️ " .. model.Name
-                btn.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-                btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-                
-                btn.MouseButton1Click:Connect(function()
-                    TargetPlane = model
-                    TargetNose = obj
-                    InfoLabel.Text = "🎯 추적: " .. model.Name
-                end)
-            end
+        -- 속도 계산 (Velocity)
+        local velocity = part.AssemblyLinearVelocity.Magnitude
+        label.Text = string.format("Name: %s\nSpeed: %.2f studs/s", part.Name, velocity)
+
+        -- 선을 카메라 위치로 업데이트
+        attachment0.WorldPosition = Camera.CFrame.Position
+    end)
+end
+
+-- "Nose"가 포함된 파트 찾기 및 감시
+local function scanNose()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and string.find(obj.Name, "Nose") then
+            createESP(obj)
         end
     end
 end
 
--- 카메라 추적 및 위치 판별
-RunService.RenderStepped:Connect(function()
-    if TargetNose then
-        Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, TargetNose.Position)
-        local speed = math.floor(TargetNose.Velocity.Magnitude * 1.94384)
-        
-        -- 섬 확인 (Raycast)
-        local ray = workspace:Raycast(TargetNose.Position, Vector3.new(0, -2000, 0))
-        local land = ray and ray.Instance.Name or "바다"
-        
-        InfoLabel.Text = string.format("기종: %s\n속도: %d kts | 위치: %s", TargetPlane.Name, speed, land)
+-- 초기 스캔 및 주기적 체크
+scanNose()
+workspace.DescendantAdded:Connect(function(obj)
+    if obj:IsA("BasePart") and string.find(obj.Name, "Nose") then
+        createESP(obj)
     end
 end)
 
-updateList()
-print("UI 실행 완료")
+--- [카메라 시점 전환 기능] ---
+-- 숫자 1번 키를 누르면 가장 가까운 Nose 파트를 관전합니다.
+local UserInputService = game:GetService("UserInputService")
+local watching = false
+
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Enum.KeyCode.One then
+        if not watching then
+            -- 가장 가까운 Nose 찾기
+            local closest = nil
+            local dist = math.huge
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj:IsA("BasePart") and string.find(obj.Name, "Nose") then
+                    local d = (obj.Position - Camera.CFrame.Position).Magnitude
+                    if d < dist then
+                        dist = d
+                        closest = obj
+                    end
+                end
+            end
+            
+            if closest then
+                Camera.CameraSubject = closest
+                watching = true
+            end
+        else
+            -- 다시 내 캐릭터로 카메라 복구
+            Camera.CameraSubject = localPlayer.Character:FindFirstChild("Humanoid")
+            watching = false
+        end
+    end
+end)
+
